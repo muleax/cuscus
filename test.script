@@ -1,0 +1,15 @@
+
+x = 20
+y = 33
+
+// should print 10
+print (y-x) * 2 - y + 17
+
+i = x
+while (i < y)
+{
+    // should print numbers from [20, 25)U(25,33)
+	if (i < 25 || i > 25)
+	    print i
+	i = i + 1
+}
