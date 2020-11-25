@@ -1,0 +1,19 @@
+
+x = 20;
+y = 33;
+
+// print 10
+print (y-x) * 2 - y + 17;
+
+i = x;
+while (i < y)
+{
+    // print even numbers from [20, 25)U(25,33)
+	if (i % 2 == 0)
+	    print i;
+	i = i + 1;
+}
+
+for (i = 0; i < 5; i = i + 1)
+    // print numbers from [0, 5)
+    print i;
