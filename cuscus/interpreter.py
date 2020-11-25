@@ -188,9 +188,9 @@ class Interpreter:
 			inc.eval()
 
 	def return_cmd(self, node):
-		self.control_signal = 'return'
 		if node.children:
 			self.retval = node.children[0].eval()
+		self.control_signal = 'return'
 
 	def break_cmd(self, node):
 		self.control_signal = 'break'
