@@ -27,6 +27,11 @@ OPERATIONS = {
 	'if':		'if_statement',
 	'while':	'while_loop',
 	'for':		'for_loop',
+	'return':	'return_cmd',
+	'break':	'break_cmd',
+	'continue':	'continue_cmd',
+	'fundef':	'fundef',
+	'funcall':	'funcall',
 	'cmdlist':	'cmdlist'
 }
 
@@ -49,27 +54,59 @@ class Interpreter:
 			if node.children:
 				s += node.children
 
-		self.env = {}
+		self.scope_stack = [{}]
+		self.fundef_scope = {}
+		self.control_signal = None
+		self.retval = None
 		return ast.eval()
 
 	def num(self, node):
 		return node.payload
 	
 	def var(self, node):
-		return self.env[node.payload]
+		for scope in reversed(self.scope_stack):
+			ret = scope.get(node.payload)
+			if ret is not None:
+				return ret
+		raise ValueError(f"Variable {node.payload} is not defined")
 	
 	def print(self, node):
 		print(' '.join(str(child.eval()) for child in node.children))
 	
 	def assign(self, node):
-		self.env[node.payload] = node.children[0].eval()
-		
-	def cmdlist(self, node):
-		ret = None
-		for child in node.children:
-			ret = child.eval()
+		self.scope_stack[-1][node.payload] = node.children[0].eval()
+
+	def fundef(self, node):
+		self.fundef_scope[node.payload] = node
+
+	def funcall(self, node):
+		fun = self.fundef_scope.get(node.payload)
+		if fun is None:
+			raise ValueError(f"Function {node.payload} is not defined")
+
+		args_body = fun.children
+		if len(args_body) - 1 != len(node.children):
+			raise ValueError(f"Function {node.payload} requires {len(args_body) - 1} arguments, {len(node.children)} given")
+
+		fun_scope = {}
+		for name, expr in zip(args_body, node.children):
+			fun_scope[name.payload] = expr.eval()
+
+		self.scope_stack.append(fun_scope)
+		args_body[-1].eval()
+		self.scope_stack.pop()
+
+		ret = self.retval
+		self.retval = None
+		self.control_signal = None
 		return ret
-	
+
+	def cmdlist(self, node):
+		for child in node.children:
+			child.eval()
+			if self.control_signal:
+				break
+
 	def ternary(self, node):
 		cond, true_expr, false_expr = node.children
 		if cond.eval():
@@ -120,14 +157,47 @@ class Interpreter:
 		cond, body = node.children
 		while cond.eval():
 			body.eval()
+
+			if self.control_signal:
+				if self.control_signal == 'continue':
+					self.control_signal = None
+					continue
+				elif self.control_signal == 'break':
+					self.control_signal = None
+					break
+				else:  # return
+					break
 	
 	def for_loop(self, node):
 		init, cond, inc, body = node.children
 		init.eval()
 		while cond.eval():
 			body.eval()
+
+			if self.control_signal:
+				if self.control_signal == 'continue':
+					self.control_signal = None
+					inc.eval()
+					continue
+				elif self.control_signal == 'break':
+					self.control_signal = None
+					break
+				else:  # return
+					break
+
 			inc.eval()
-	
+
+	def return_cmd(self, node):
+		self.control_signal = 'return'
+		if node.children:
+			self.retval = node.children[0].eval()
+
+	def break_cmd(self, node):
+		self.control_signal = 'break'
+
+	def continue_cmd(self, node):
+		self.control_signal = 'continue'
+
 	def bool(self, node):
 		return bool(node.children[0].eval())
 	

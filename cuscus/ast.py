@@ -3,7 +3,8 @@ import cuscus.lexer
 
 
 OPS_NODES = ADDSUB_OPS + MULDIV_OPS + CMP_OPS + LOGIC_OPS + ('=',)
-CUSTOM_NODES = ('num', 'var', 'neg', 'bool', 'ternary', 'print', 'cmdlist', 'if', 'while', 'for')
+CUSTOM_NODES = ('num', 'var', 'neg', 'bool', 'ternary', 'print', 'cmdlist',
+				'if', 'while', 'for', 'continue', 'break', 'return', 'fundef', 'funcall')
 AST_NODES = set(OPS_NODES + CUSTOM_NODES)
 
 
@@ -31,7 +32,7 @@ class TokenStack:
 		token = self.front()
 		if (expected is not None) and (token != expected):
 			source = ' '.join(self.front_range(16))
-			raise ValueError(f"Wrong token '{token}' while '{expected}' expected: {source}...")
+			raise ValueError(f"Wrong token \'{token}\' while \'{expected}\' expected: \'{source}...\'")
 		self.i += 1
 		return token
 
@@ -77,7 +78,7 @@ class AstBuilder:
 			node = getattr(self, builder_name)()
 			if not node:
 				source = ' '.join(self.tokens.front_range(16))
-				raise ValueError(f"Wrong expression for {builder_name}: {source}...")
+				raise ValueError(f"Wrong expression for \'{builder_name}\': \'{source}...\'")
 		return node
 	# OUT := <open_brace> NONTERMINAL <close_brace>
 	def build_braced(self, open_brace, builder_name, close_brace, accept_fail=True):
@@ -129,17 +130,19 @@ class AstBuilder:
 			return AstNode('bool', [node])
 		return None
 
-	# UNIT := NUM | VAR | NEG | BOOL | FUNCALL | (EXPR)
+	# UNIT := FUNCALL|NUM|VAR|NEG|BOOL|(EXPR)
 	def unit(self):
-		node = self.build('num')
+		node = self.build('funcall')
 		if not node:
-			node = self.build('var')
+			node = self.build('num')
 			if not node:
-				node = self.build('neg')
+				node = self.build('var')
 				if not node:
-					node = self.build('bool')
+					node = self.build('neg')
 					if not node:
-						node = self.build_braced('(', 'expr', ')')
+						node = self.build('bool')
+						if not node:
+							node = self.build_braced('(', 'expr', ')')
 		return node
 
 	# MULDIV := UNIT [*|/|% MULDIV]
@@ -208,10 +211,12 @@ class AstBuilder:
 			cond = self.build_braced('(', 'expr', ')', accept_fail=False)
 			true_body = self.build('cmd', accept_fail=False)
 			children = [cond, true_body]
+
 			if self.tokens.front() == 'else':
 				self.tokens.pop()
 				false_body = self.build('cmd', accept_fail=False)
 				children.append(false_body)
+
 			return AstNode('if', children)
 		return None
 
@@ -228,6 +233,7 @@ class AstBuilder:
 	def for_loop(self):
 		if self.tokens.front() == 'for':
 			self.tokens.pop()
+
 			self.tokens.pop(expected='(')
 			init = self.build('statement', accept_fail=False)
 			self.tokens.pop(expected=';')
@@ -235,7 +241,9 @@ class AstBuilder:
 			self.tokens.pop(expected=';')
 			inc = self.build('statement', accept_fail=False)
 			self.tokens.pop(expected=')')
+
 			body = self.build('cmd', accept_fail=False)
+
 			return AstNode('for', [init, cond, inc, body])
 		return None
 
@@ -265,9 +273,72 @@ class AstBuilder:
 				cmd = self.build('expr')
 		return cmd
 
-	# CMD := STATEMENT;|IF|WHILE|FOR|'{'CMDLIST'}'
+	# CONTROL := return[EXPR]|break|continue
+	def control(self):
+		if self.tokens.front() == 'return':
+			self.tokens.pop()
+			ret_expr = self.build('expr')
+			children = [ret_expr] if ret_expr else None
+			return AstNode('return', children)
+
+		if self.tokens.front() == 'break':
+			self.tokens.pop()
+			return AstNode('break')
+
+		if self.tokens.front() == 'continue':
+			self.tokens.pop()
+			return AstNode('continue')
+
+		return None
+
+	# FUNDEF := fun VAR ([VAR {,VAR}]) CMD
+	def fundef(self):
+		if self.tokens.front() == 'fun':
+			self.tokens.pop()
+			name = self.build('var', accept_fail=False)
+
+			args_body = []
+			self.tokens.pop(expected='(')
+			arg = self.build('var')
+			if arg:
+				args_body.append(arg)
+				while self.tokens.front() == ',':
+					self.tokens.pop()
+					arg = self.build('var', accept_fail=False)
+					args_body.append(arg)
+
+			self.tokens.pop(expected=')')
+
+			body = self.build('cmd', accept_fail=False)
+			# body goes last in children list
+			args_body.append(body)
+
+			return AstNode('fundef', args_body, name.payload)
+		return None
+
+	# FUNCALL := VAR ([EXPR {,EXPR}])
+	def funcall(self):
+		name = self.build('var')
+		if name and self.tokens.front() == '(':
+			self.tokens.pop()
+			args = []
+			arg = self.build('expr')
+			if arg:
+				args.append(arg)
+				while self.tokens.front() == ',':
+					self.tokens.pop()
+					arg = self.build('expr', accept_fail=False)
+					args.append(arg)
+			self.tokens.pop(expected=')')
+
+			return AstNode('funcall', args, name.payload)
+		return None
+
+	# CMD := STATEMENT;|CONTROL;|IF|WHILE|FOR|FUNDEF|'{'CMDLIST'}'
 	def cmd(self):
 		cmd = self.build('statement')
+		if not cmd:
+			cmd = self.build('control')
 		if cmd:
 			self.tokens.pop(expected=';')
 			return cmd
@@ -278,7 +349,9 @@ class AstBuilder:
 			if not cmd:
 				cmd = self.build('for_loop')
 				if not cmd:
-					cmd = self.build_braced('{', 'cmdlist', '}')
+					cmd = self.build('fundef')
+					if not cmd:
+						cmd = self.build_braced('{', 'cmdlist', '}')
 
 		return cmd
 
